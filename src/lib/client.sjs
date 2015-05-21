@@ -1,5 +1,8 @@
-const lodash = require("lodash");
-const packagejson = require("../package.json")[""]
+const TlsSocket = require("tls").TLSSocket;
+const format = require("util").format;
+const inspect = require("util").inspect;
+const defaults = require("lodash.defaults");
+const mapValues = require("lodash.mapvalues");
 
 // delegate x y -> function () { this.x.y.apply(this.x, arguments); return this; }
 macro delegate {
@@ -23,28 +26,23 @@ macro delegate_ret {
 const defaultFactoryConfiguration = {
     "NetSocket" : require("net").Socket,
     "IrcSocket" : require("irc-socket"),
-    "MessageHandler" : require("./message-handler.js"),
-    "CommandHandler" : require("./command-handler.js"),
     "Plugins" : require("tennu-plugins"),
-    "BiSubscriber" : require("./bisubscriber.js"),
     "Logger": require("./null-logger.js"),
-    "NicknameTracker": require("./nickname-tracker.js")
 };
 
 const defaultClientConfiguration = {
     // IrcSocket Config
     "server": undefined,
     "port": 6667,
-    "ipv6": undefined,
-    "localAddress": undefined,
-    "secure": false,
     "password": undefined,
-    "capab": false,
-    "nickname": "tennubot",
+    "capabilities": {},
+    "nicknames": ["tennubot"],
     "username": "tennu",
     "realname": "tennu " + require("../package.json")["version"],
+    "connectOptions": undefined,
 
     // Tennu Config
+    "tls": false,
     "channels": [],
     "nickserv": "nickserv",
     "auth-password": undefined,
@@ -53,72 +51,84 @@ const defaultClientConfiguration = {
     "disable-help": false
 };
 
+const loggerMethods = ["debug", "info", "notice", "warn", "error", "crit", "alert", "emerg"];
+
 /** Fields
  * _config
  * _socket
  * _logger
- * out      (_outputSocket)
+ * _action
+ * _self
+ * _subscriber
  * events   (_subscriber)
  * plugins  (_plugins)
- * nickname (_nickname)
  */
  const Client = function (config, dependencies) {
-    if (config.nick || config.user) {
-        throw new Error("Please use \"nickname\" and \"username\" instead of \"nick\" and \"user\" in your configuration.");
-    }
-
     const client = Object.create(Client.prototype);
 
     // Parse the configuration object. Make it immutable.
-    client._config = config = Object.freeze(lodash.defaults({}, config, defaultClientConfiguration));
-    di = lodash.defaults({}, dependencies || {}, defaultFactoryConfiguration);
+    client._config = config = defaults({}, config, defaultClientConfiguration);
+    // TODO(Havvy): Handle the logic in here better.
+
+    if (config.daemon === "twitch") {
+        // Twitch.tv doesn't allow capabilities.
+        config.capabilities = undefined;
+    } else {
+        if (!config.capabilities) {
+            config.capabilities = { requires: ["multi-prefix"] };
+        } else if (!config.capabilities.requires) {
+            config.capabilities.requires = ["multi-prefix"];
+        } else {
+            if (config.capabilities.requires.indexOf("multi-prefix") === -1) {
+                config.capabilities.requires.push("multi-prefix");
+            }
+        }
+    }
+
+    dependencies = mapValues(dependencies, function (dep) {
+        if (typeof dep === "object") {
+            return function () { return dep; };
+        } else {
+            return dep;
+        }
+    });
+    di = defaults({}, dependencies || {}, defaultFactoryConfiguration);
 
     // Create a logger.
     // Default logger is a bunch of NOOPs.
     client._logger = new di.Logger();
+    var missingLoggerMethods = loggerMethods.filter(function (method) {
+        return typeof client._logger[method] !== "function";
+    });
+    if (missingLoggerMethods.length !== 0) {
+        throw new Error(format("Logger passed to tennu.Client is missing the following methods: %s", inspect(missingLoggerMethods)));
+    }
+
+    var netSocket = new di.NetSocket();
+    if (config.tls) {
+        netSocket = new TlsSocket(netSocket, {
+            rejectUnauthorized: false,
+            isServer: false
+        });
+    }
 
     // The socket reads and sends messages from/to the IRC server.
-    client._socket = new di.IrcSocket(config, di.NetSocket);
-
-    // Create the listener to the socket.
-    // This listener will parse the raw messages of the socket, and
-    // emits specific events to listen to.
-    client._messageHandler = new di.MessageHandler(client, client._logger, client._socket);
-
-    // Create the object that tracks the nickname of the client.
-    // Because this object is a function, it is expected that
-    // the factory function does not use `this`.
-    client._nickname = di.NicknameTracker(config.nickname, client._messageHandler);
-
-    // Create the listener to private messages from the IRCMessageEmitter
-    // The commander will parse these private messages for commands, and
-    // emit those commands, also parsed.
-    const commandHandler = new di.CommandHandler(config, client, client._nickname, client._logger);
-
-    // The subscriber handles event subscriptions to the Client object,
-    // determining whether they should be handled by the IrcMessageEmitter
-    // or the Command Handler.
-    client._subscriber = new di.BiSubscriber(client._messageHandler, commandHandler);
-    client._subscriber.on("privmsg", function (privmsg) { commandHandler.parse(privmsg); });
+    client._socket = new di.IrcSocket(config, netSocket);
 
     // Configure the plugin system.
     client._plugins = new di.Plugins("tennu", client);
-    client._plugins.addHook("handlers", function (module, handlers) {
-        client._subscriber.on(handlers);
-    });
     client.note("Tennu", "Loading default plugins");
-    client._plugins.use(["server", "action", "help", "user", "channel", "startup"], __dirname);
+    client._plugins.use(["subscriber", "messages", "commands", "server", "action", "ctcp", "help", "user", "channel", "startup", "self"], __dirname);
     client.note("Tennu", "Loading your plugins");
     client._plugins.use(config.plugins || [], process.cwd());
 
-    // Grab a reference to the "action" plugin exports, so that the client
-    // can delegate the actions to it.
-    client._actionExports = client.getPlugin("action");
+    // Grab a reference to various plugin exports
+    // so that the client can delegate the actions to it.
+    client._action = client.getPlugin("action");
+    client._self = client.getPlugin("self");
+    client._subscriber = client.getPlugin("subscriber");
 
-    client.out = client._outputSocket;
-    client.events = client._subscriber;
     client.plugins = client._plugins;
-    client.nickname = client._nickname;
 
     client.connected = false;
 
@@ -165,30 +175,37 @@ Client.prototype.disconnect = disconnect;
 Client.prototype.end = disconnect;
 
 // implements IRC Output Socket
-Client.prototype.act                    = delegate_ret _actionExports act;
-Client.prototype.ctcp                   = delegate_ret _actionExports ctcp;
-Client.prototype.join                   = delegate_ret _actionExports join;
-Client.prototype.kick                   = delegate_ret _actionExports kick;
-Client.prototype.mode                   = delegate_ret _actionExports mode;
-Client.prototype.nick                   = delegate_ret _actionExports nick;
-Client.prototype.notice                 = delegate_ret _actionExports notice;
-Client.prototype.part                   = delegate_ret _actionExports part;
-Client.prototype.quit                   = delegate_ret _actionExports quit;
-Client.prototype.say                    = delegate_ret _actionExports say;
-Client.prototype.userhost               = delegate_ret _actionExports userhost;
-Client.prototype.who                    = delegate_ret _actionExports who;
-Client.prototype.whois                  = delegate_ret _actionExports whois;
-Client.prototype.raw                    = delegate_ret _actionExports raw;
-Client.prototype.rawf                   = delegate_ret _actionExports rawf;
+Client.prototype.act                    = delegate_ret _action act;
 
-// implements BiSubscriber
+// Deprecated(4.2.x)
+Client.prototype.ctcp                   = delegate_ret _action ctcp;
+
+Client.prototype.ctcpRequest            = delegate_ret _action ctcpRequest;
+Client.prototype.ctcpRespond            = delegate_ret _action ctcpRespond;
+Client.prototype.join                   = delegate_ret _action join;
+Client.prototype.kick                   = delegate_ret _action kick;
+Client.prototype.mode                   = delegate_ret _action mode;
+Client.prototype.nick                   = delegate_ret _action nick;
+Client.prototype.notice                 = delegate_ret _action notice;
+Client.prototype.part                   = delegate_ret _action part;
+Client.prototype.quit                   = delegate_ret _action quit;
+Client.prototype.say                    = delegate_ret _action say;
+Client.prototype.userhost               = delegate_ret _action userhost;
+Client.prototype.who                    = delegate_ret _action who;
+Client.prototype.whois                  = delegate_ret _action whois;
+Client.prototype.raw                    = delegate_ret _action raw;
+Client.prototype.rawf                   = delegate_ret _action rawf;
+
+// implements Self Plugin Exports
+Client.prototype.nickname               = delegate_ret _self nickname;
+
+// implements Subscriber
 Client.prototype.on                     = delegate _subscriber on;
 Client.prototype.once                   = delegate _subscriber once;
 Client.prototype.off                    = delegate _subscriber off;
 
 // implements PluginSystem
 Client.prototype.use                    = delegate     _plugins use;
-Client.prototype.getModule              = delegate_ret _plugins getPlugin;
 Client.prototype.getPlugin              = delegate_ret _plugins getPlugin
 Client.prototype.getRole                = delegate_ret _plugins getRole;
 Client.prototype.initializePlugin       = delegate     _plugins initialize;

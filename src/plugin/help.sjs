@@ -19,7 +19,9 @@ module.exports = {
             return {};
         }
 
-        const commandTrigger = client.config("command-trigger");
+        const commandTrigger = client.config("command-trigger") || "!";
+        const commandIgnoreList = client.config("command-ignore-list") || [];
+
         // (string | [string]) -> string | [string]
         function replaceCommandTrigger (response) {
             if (typeof response === "string") {
@@ -63,7 +65,6 @@ module.exports = {
         return {
             handlers: {
                 "!help": function (command) {
-                    client.notice("ModHelp", "!help being handled.");
                     // Default to showing the help for the help module if no args given.
                     const query = command.args.length === 0 ? ["help"] : command.args.slice();
                     var response = helpResponseMessage(query);
@@ -76,9 +77,7 @@ module.exports = {
                 },
 
                 "!commands": function (command) {
-                    client.notice("ModHelp", "!commands being handled.");
-
-                    const start = ["List of known commands: "];
+                    const start = ["List of known commands:"];
                     return start.concat(commandset.array().join(", "));
                 }
             },
@@ -125,6 +124,10 @@ module.exports = {
                             throw new TypeError(format("Commands property for module %s is invalid.", module));
                         }
 
+                        if (commandIgnoreList.indexOf(command) !== -1) {
+                            return;
+                        }
+
                         commandset.add(command);
                     });
                 }
@@ -151,5 +154,7 @@ module.exports = {
 
             commands: ["help", "commands"]
         };
-    }
+    },
+
+    requires: ["commands"]
 };

@@ -1,157 +1,129 @@
-const sinon = require('sinon');
-const assert = require('better-assert');
-const equal = require('deep-eql');
-const inspect = require('util').inspect;
-const format = require('util').format;
-require('source-map-support').install();
+const sinon = require("sinon");
+const assert = require("better-assert");
+const equal = require("deep-eql");
+const inspect = require("util").inspect;
+const format = require("util").format;
+require("source-map-support").install();
+const defaults = require("lodash.defaults");
 
 const debug = false;
 const logfn = debug ? console.log.bind(console) : function () {};
-const logger = {debug: logfn, info: logfn, notice: logfn, warn: logfn, error: logfn};
+const logger = {debug: logfn, info: logfn, notice: logfn, warn: logfn, error: logfn, crit: logfn, alert: logfn, emerg: logfn};
 
-const Client = require('../lib/client.js');
-const NetSocket = require('../test-helpers/mock-net-socket.js');
+const Client = require("../lib/client.js");
+const NetSocket = require("@havvy/mock-net-socket")(sinon);
 
-const network = {
-    'nickname': 'testbot',
-    'username': 'testuser',
-    'server': 'irc.test.net',
-    'nickserv' : 'nickserv',
-    'auth-password' : 'testpass',
-    'channels' : ['#test'],
+const networkConfig = {
+    "server": "irc.test.net",
+    "nicknames": ["testbot"],
+    "username": "testuser",
+    "realname": "tennu irc bot"
 };
 
-const fakeWrite = function fakeWrite (message) {
-    fakeWrite.spy.apply(this, arguments);
-
-    message = message.substring(0, message.length - 2);
-    // console.log('Fakewrite called with message `' + message + '`');
-    try {
-        if (!this.connected) return;
-
-        switch (message) {
-            case 'JOIN :#test':
-            this.emit('data', [
-                ':testbot!testuser@localhost JOIN :#test',
-                ':irc.localhost.net 353 testbot = #test :@testbot',
-                ':irc.localhost.net 366 testbot #test :End of /NAMES list.\r\n'].join('\r\n'));
-            break;
-            case 'QUIT':
-            this.emit('data', 'ERROR :Closing Link: testbot[localhost] (Quit: testbot)\r\n');
-            break;
-            case 'NICK newNick':
-            this.emit('data', ':testbot!testuser@localhost NICK :newNick\r\n');
-            break;
-            case 'PART #test':
-            this.emit('data', ':testbot!testuser@localhost PART #test\r\n');
-            break;
-            case 'PRIVMSG nickserv :identify testpass':
-            this.emit('data', ':nickserv!services@test.net NOTICE testbot :Password accepted - you are now recognized.\r\n');
-            break;
-            default:
-            void 0;
-        }
-    } catch (e) {
-        console.log('ERROR');
-        console.log(e.stack);
-    }
+const messages = {
+    rpl_welcome: ":irc.test.net 001 testbot :Welcome to the Test IRC Network testbot!testuser@localhost\r\n",
+    rpl_cap_ls: ":irc.test.net CAP * LS :multi-prefix\r\n",
+    rpl_ack_default_capabilities: ":irc.test.net CAP * ACK :multi-prefix\r\n",
+    _: ""
 };
 
-const boxfn = function (value) {
-    return function () { return value; };
-};
-
-describe 'Tennu Client' {
-    var netsocket, tennu;
+describe "Tennu Client:" {
+    var netsocket, client;
 
     beforeEach {
-        logfn(/* newline */);
+        netsocket = NetSocket(logfn);
+    }
 
-        fakeWrite.spy = sinon.spy();
-
-        netsocket = new NetSocket(logger);
-        netsocket.write = fakeWrite;
-
-        tennu = Client(network, {
-            NetSocket: boxfn(netsocket),
-            Logger: boxfn(logger)
+    it "Basic Connecting and Disconnecting" {
+        client = Client(networkConfig, {
+            NetSocket: netsocket,
+            Logger: logger
         });
+
+        assert(client.connected === false);
+        client.connect();
+        assert(client._socket.isStarted() === true);
+        assert(client._socket.isReady() === false);
+        assert(client.connected === true);
+        client.disconnect();
+        assert(client.connected === false);
     }
 
-    afterEach {
-        logfn('End of test.');
-    }
+    describe "Error handling" {
+        it "tells you which methods are missing on the logger" {
+            var config = networkConfig
 
-    it 'Basic Connecting and Disconnecting' {
-        assert(tennu.connected === false);
-        tennu.connect();
-        assert(tennu.connected === true);
-        tennu.disconnect();
-        assert(tennu.connected === false);
-    }
+            try {
+                Client(networkConfig, {
+                    Logger: function () {
+                        return {debug: logfn, info: logfn, notice: logfn, warn: logfn, error: logfn};
+                    }
+                });
 
-    // Move this to its own file.
-    describe 'Nickname Tracking' {
-        beforeEach (done) {
-            netsocket.on('connect', done);
-            tennu.connect();
-        }
-
-        afterEach (done) {
-            netsocket.on('close', done);
-            tennu.disconnect();
-        }
-
-        it 'tracks its initial nickname' {
-            assert(tennu.nickname() === 'testbot');
-        }
-
-        describe 'changing nick' {
-            beforeEach (done) {
-                tennu.on('nick', function () { done() });
-                tennu.nick('newNick');
-            }
-
-            it 'tracks its changed nick' {
-                assert(tennu.nickname() === 'newNick');
+                assert(false);
+            } catch (e) {
+                logfn(e.message);
+                assert(e.message === "Logger passed to tennu.Client is missing the following methods: [ 'crit', 'alert', 'emerg' ]");
             }
         }
     }
 
-    describe 'autojoin' {
-        beforeEach (done) {
-            tennu.on('join', function () { done() });
-            tennu.connect();
-        }
-
-        afterEach (done) {
-            netsocket.on('close', done);
-            tennu.disconnect();
-        }
-
-        it 'automatically joins specified channels.' {
-            assert(fakeWrite.spy.calledWith('JOIN :#test\r\n', 'utf-8'));
-        }
-    }
-
-    describe 'autoidentify' {
-        beforeEach (done) {
-            tennu.on('notice', function (message) {
-                if (message.nickname === 'nickserv') {
-                    done();
-                }
+    describe "Capabilities always requires `multi-prefix`" {
+        it "even when no capabilities passed" {
+            var client = Client(networkConfig, {
+                NetSocket: netsocket,
+                Logger: logger
             });
 
-            tennu.connect();
+            client.connect();
+
+            client._socket.impl.acceptConnect();
+            assert(client._socket.impl.write.getCall(0).calledWithExactly("CAP LS\r\n", "utf-8"));
+            client._socket.impl.acceptData(messages.rpl_cap_ls);
+            assert(client._socket.impl.write.getCall(1).calledWithExactly("CAP REQ :multi-prefix\r\n", "utf-8"));
+            client._socket.impl.acceptData(messages.rpl_ack_default_capabilities);
         }
 
-        afterEach (done) {
-            netsocket.on('close', done);
-            tennu.disconnect();
+        it "even when capabilities is passed without a requires property" {
+            var config = defaults({capabilities: {}}, networkConfig);
+            var client = Client(config, {
+                NetSocket: netsocket,
+                Logger: logger
+            });
+
+            client.connect();
+            client._socket.impl.acceptConnect();
+            assert(client._socket.impl.write.getCall(0).calledWithExactly("CAP LS\r\n", "utf-8"));
+            client._socket.impl.acceptData(messages.rpl_cap_ls);
+            assert(client._socket.impl.write.getCall(1).calledWithExactly("CAP REQ :multi-prefix\r\n", "utf-8"));
+            client._socket.impl.acceptData(messages.rpl_ack_default_capabilities);
         }
 
-        it 'automatically identifies to services.' {
-            assert(fakeWrite.spy.calledWith('PRIVMSG nickserv :identify testpass\r\n', 'utf-8'));
+        it "event when capabilities is passed a requires array property without them" {
+            var config = defaults({ capabilities: { requires: [] } }, networkConfig);
+            var client = Client(config, {
+                NetSocket: netsocket,
+                Logger: logger
+            });
+
+            client.connect();
+            client._socket.impl.acceptConnect();
+            assert(client._socket.impl.write.getCall(0).calledWithExactly("CAP LS\r\n", "utf-8"));
+            client._socket.impl.acceptData(messages.rpl_cap_ls);
+            assert(client._socket.impl.write.getCall(1).calledWithExactly("CAP REQ :multi-prefix\r\n", "utf-8"));
+            client._socket.impl.acceptData(messages.rpl_ack_default_capabilities);
+        }
+
+        it "except when the daemon is 'twitch'" {
+            var config = defaults({ daemon: "twitch" }, networkConfig);
+            var client = Client(config, {
+                NetSocket: netsocket,
+                Logger: logger
+            });
+
+            client.connect();
+            client._socket.impl.acceptConnect();
+            assert(client._socket.impl.write.getCall(0).calledWithExactly("USER testuser 8 * :tennu irc bot\r\n", "utf-8"));
         }
     }
 }

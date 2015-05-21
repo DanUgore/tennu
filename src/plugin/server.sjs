@@ -1,13 +1,13 @@
 module.exports = {
-    init: function (client, imports) {
+    init: function (client, deps) {
         const isupport = {};
 
-        client._messageHandler.isupport(isupport);
+        deps.messages.isupport(isupport);
 
         return {
             handlers: {
                 '005': function (isupportMessage) {
-                    isupportMessage.params.map(function (param) {
+                    isupportMessage.params.slice(1, -1).map(function (param) {
                         return param.split('=');
                     }).forEach(function {
                         ([supported]) => isupport[supported] = true,
@@ -20,5 +20,7 @@ module.exports = {
                 isupport: isupport
             }
         };
-    }
+    },
+
+    requires: ["messages"]
 };

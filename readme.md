@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/Tennu/tennu.png?branch=master)](https://travis-ci.org/Tennu/tennu)
+[![Travis Status](https://img.shields.io/travis/Tennu/tennu.svg)](https://travis-ci.org/Tennu/tennu) [![NPM Downloads](https://img.shields.io/npm/dm/tennu.svg)](https://npmjs.org/package/tennu) [![Version](https://img.shields.io/npm/v/tennu.svg)](https://npmjs.org/package/tennu) [![ISC Licensed](https://img.shields.io/npm/l/tennu.svg)](http://opensource.org/licenses/ISC) [![Github Issue Count](https://img.shields.io/github/issues/tennu/tennu.svg)](https://github.com/Tennu/tennu/issues) [![Github Stars](https://img.shields.io/github/stars/Tennu/tennu.svg)](https://github.com/Tennu/tennu/stargazers)
 
 Tennu is an IRC bot framework written in Node.js
 
@@ -8,7 +8,13 @@ Tennu is an IRC bot framework written in Node.js
 
 ## Basic Usage ##
 
-With Tennu, you create an irc client, require your plugins or subscribe to your event listeners, and then connect.
+### As a framework ###
+
+See [Getting Started](https://tennu.github.io/documentation/getting-started).
+
+### Library Usage ###
+
+With Tennu as a library, you create an irc client, require your plugins or subscribe to your event listeners, and then connect.
 
 ```javascript
 var tennu = require('tennu');
@@ -32,7 +38,7 @@ myClient.on('!join', function (command) {
 });
 
 // Load a plugin.
-myClient.initialize(require('./yourModule'));
+myClient.initialize(require('./yourPlugin'));
 
 // Or just use a plugin from tennu_plugins/%f or node_plugins/tennu-%f
 myClient.use(['admin', 'last-seen']);
@@ -40,32 +46,39 @@ myClient.use(['admin', 'last-seen']);
 myClient.connect();
 ```
 
-See [https://tennu.github.io/](tennu.github.io) for the full documentation.
+See [https://tennu.github.io/](https://tennu.github.io) for the full documentation.
 
 ----------
 
 ## Configuration ##
 
-A network configuration object has the following properties:
+The network configuration object contains all of the properties of
+[an irc-socket](https://npmjs.org/package/irc-socket) except for "socket"
+plus the following configuration options:
+
+* tls                 - Boolean that if true, upgrades the NetSocket to a TLS socket.
+* auth-password       - Password for identifying to services
+* nickserv            - Nickname of nickserv service. Defaults to `"nickserv"`.
+* command-trigger     - Command character to trigger commands with. By default, `"!"`.
+* command-ignore-list - List of commands not to fire a handler for. By default, `[]`. _Example:_ `["commands", "help"]`
+* channels            - Array of channels to autojoin. _Example:_ `["#help", "#tennu"]`
+* plugins             - An array of plugin names that the bot requires.
+* disable-help        - [Deprecated] Boolean that when true, disables the built-in help plugin.
+* daemon              - The IRCd you are connecting to. Optional, but useful for "unreal" and "twitch".
+
+The irc-socket configuration values are as follows:
 
 * server          - IRC server to connect to. _Example:_ _irc.mibbit.net_
 * port            - Port to connect to. Defaults to 6667.
-* secure          - Use a TLS socket (Throws away the NetSocket)
-* ipv6            - Whether you are connecting over ipv6 or not.
-* localAddress    - See net.Socket documentation. ;)
-* capab           - IRC3 CAP support. (Untested)
-* password        - Password for IRC Network (most networks do not have a password)
-* nickname        - Nickname the bot will use. Defaults to "tennubot"
-* username        - Username the bot will use. Defaults to "user"
-* realname        - Realname for the bot. Defaults to "tennu v0.3"
-* auth-password   - Password for identifying to services.
-* nickserv        - Nickname of nickserv service. Defaults to "nickserv".
-* command-trigger - Command character to trigger commands with. By default, '!'.
-* channels        - Array of channels to autojoin. _Example:_ ["#help", "#tennu"]
-* plugins         - An array of plugin names that the bot requires.
-* disable-help    - Disables the built-in help plugin.
+* nicknames       - Array of nicknames to try to use in order.
+* username        - Username part of the hostmask.
+* realname        - "Real name" to send with the USER command.
+* password        - Password used to connect to the network. Most networks don't have one.
+* proxy           - WEBIRC details if your connection is acting as a (probably web-based) proxy.
+* capabilities    - IRCv3 capabilities required or wanted. Tennu requires `multi-prefix`.
+* connectOptions  - Options passed to the wrapped socket's connect method. Options port and host are ignored.
 
-Other plugins may add additional properties.
+Other plugins may add additional properties. See their respective documentation.
 
 Configuration objects are JSON encodable.
 
@@ -76,13 +89,10 @@ replace the factories that the Client uses by default.
 
 * NetSocket
 * IrcSocket
-* MessageHandler
-* CommandHandler
 * Plugins
-* BiSubscriber
 * Logger
 
-These functions will always be called as constructors (with `new`).
+These functions will always be called as constructors (a.k.a. with `new`).
 
 ### Logging ###
 
@@ -110,7 +120,7 @@ Note: Tennu uses a custom event handler. Listeners are placed at the end of the
 node event queue (with setImmediate), insead of happening in the same turn.
 Errors are currently logged to console, but otherwise swallowed.
 
-### Respond Functionality ###
+### Response Functionality ###
 
 Commands and Messages that have a channel property take a return value. Currently, the
 return value must be a string or array that is then said to the channel the message
@@ -130,10 +140,12 @@ tennu.on('privmsg', function (privmsg) {
 
 ### Subscribing Options ###
 
+See [Subscriber Plugin docs](https://tennu.github.io/plugin/subscriber)
+
 Subscribing to events in Tennu is more flexible than most event listeners.
 
 You register a single handler on multiple events at once by separating the events with a space,
-for example `.on("x y", fn)` is equivalent to `.on('x', fn); .on('y', fn)`. Furthermore, an object
+for example `client.on("x y", fn)` is equivalent to `client.on('x', fn); client.on('y', fn)`. Furthermore, an object
 can be passed, where each key is passed as the first parameter and its value, the second.
 
 ```javascript
@@ -149,7 +161,7 @@ on({
 })
 ```
 
-You can also unsubscribe non-once events with `off`, taking the same parameters as `on`.
+You can also unsubscribe non-once message events with `off`, taking the same parameters as `on`.
 
 ### Listener Parameters ###
 
@@ -189,10 +201,6 @@ For example, a command of "!do-it ARG1 ARG2" will have args be ["ARG1", "ARG2"] 
 
 All of the following are methods on Tennu that can be used once connected.
 
-These methods are also available on the client's 'out' property.
-In Tennu 0.9.0, the 'out' property will go away, and the 'actions' plugin
-will export these methods.
-
 ### say(channel, message) ###
 
 * channel is either a channel ("#chan") or a user ("nick").
@@ -225,10 +233,16 @@ botnick does something!
 tennu.act('#example', "does something!");
 ```
 
-### ctcp(channel, type, message) ###
+### ctcpRequest(channel, tag, message) ###
 
 ```javascript
-tennu.ctcp('havvy', 'ping', 'PINGMESSAGE');
+tennu.ctcpRequest('havvy', 'PING', 'ping message');
+```
+
+### ctcpRespond(channel, tag, message) ###
+
+```javascript
+tennu.ctcpRespond('Havvy', 'VERSION', 'Tennu v4.2.0 (https://tennu.github.io)');
 ```
 
 ### nick(newNick) ###
@@ -288,7 +302,7 @@ You may access the plugin system's methods via the Client.plugins property
 or by using one of the following methods:
 
 * client.require()
-* client.getModule()
+* client.getPlugin()
 * client.getRole()
 * client.use()
 * client.initializePlugin()
@@ -300,39 +314,9 @@ See [Creating Your Own Plugins](https://github.com/Havvy/tennu/blob/master/doc/c
 
 See [Getting Started](http://tennu.github.io/documentation/getting-started).
 
-### Built-In Modules ###
+### Built-In Plugins ###
 
-Only the help plugin is currently fully implemented.
-
-#### help ####
-
-Handles the two commands "!commands" and "!help".
-
-See [Help Module Documentation](https://tennu.github.io/plugins/help).
-
-If you don't want this functionality, set `disable-help` to `true` in your configuration object.
-
-#### channels ####
-
-Unimplemented. Currently being worked on by Dan_Ugore.
-
-#### users ####
-
-This plugin has a single method exported: isIdentifedAs(nickname, nickname_identified, callback)
-
-See [User Module Documentation](https://tennu.github.io/plugins/user).
-
-#### server ####
-
-Information about the server. For now, the only thing this plugin offers is a
-capabilities map listing the information from the 005 raw numeric.
-
-See [Server Plugin Documentation](https://tennu.github.io/plugins/server).
-
-```javascript
-var server = tennu.use("server");
-console.log(util.inspect(server.capabilities));
-```
+See [Plugins documentation](https://tennu.github.io/plugins).
 
 ## Command Line Utility
 
@@ -356,13 +340,13 @@ looking for any way to help.
 
 ### Directory Structure ###
 
-The `lib`, `tennu_plugins`, and `test` directories are all auto-generated files,
+The `lib`, `tennu_plugins`, `bin`, and `test` directories are all auto-generated files,
 with the actual source in subdirectories in the `src` directory.
 
 The `bin` directory contains the executables that the package provides. Right now this
 is only the 'tennu' program described in the Command Line Utility section.
 
-The `examples` directory contains example bots, mainly used for integration testing.
+The `examples` directory contains example bots, which may or may not work.
 
 ### Tests ###
 
@@ -372,14 +356,14 @@ npm test
 
 This command will rebuild the test files and then run the test suite.
 
-Between all projects (tennu, tennu-plugins, irc-socket, after-events),
-there are over 100 tests, but more are always appreciated, especially
-if they are failing with an actual bug. ;)
+Between all projects (tennu, tennu-plugins, irc-socket, after-events,
+prefix-event-emitter), there are over 200 tests, but more are always
+appreciated, especially if they are failing with an actual bug. ;)
 
 ### Building Files ###
 
 ```
-npm run-script build
+npm run build
 ```
 
 Tennu is written using the Sweet.js dialect of JavaScript. If you've never
